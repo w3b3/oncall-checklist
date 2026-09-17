@@ -1,29 +1,76 @@
-import { getDeployedCommit } from "../Api/fetchCommits";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { getCommits, getDeployedCommit } from "../Api/fetchCommits";
+import { Commit, RepoConfig } from "../types";
 
-const extractCommit = (commitMessage: string, startIndex: number) => {
-  return commitMessage.slice(startIndex + 1, commitMessage.length - 3);
-};
+export { DEPLOY_SHA_PATTERN } from "../Api/fetchCommits";
 
-export const SEARCH_PATTERN = /@\d/;
-// const SEARCH_PATTERN = "Updates"; //This will not work. No commit to parse
+export interface DeploymentState {
+  /** SHA currently live, parsed from the deploy branch tip. */
+  deployedSHA: string;
+  /** Recent commits on the default branch, newest first. */
+  log: Commit[];
+  loading: boolean;
+  error: string;
+  /** Set when the repo loads but no deploy marker could be parsed. */
+  warning: string;
+  reload: () => void;
+}
 
-export const useDeployedCommit = (): string => {
-  const [isValid, setIsValid] = useState(false);
-  const [commitMessage, setCommitMessage] = useState("");
-  const [startIndex, setStartIndex] = useState(-1);
+export const useDeployment = (config: RepoConfig): DeploymentState => {
+  const [deployedSHA, setDeployedSHA] = useState("");
+  const [log, setLog] = useState<Commit[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [warning, setWarning] = useState("");
+  const [nonce, setNonce] = useState(0);
+
+  const reload = useCallback(() => setNonce((value) => value + 1), []);
+
   useEffect(() => {
-    const asyncCall = async () => {
-      const commit = await getDeployedCommit();
-      const _commitMessage = commit?.message ?? "";
-      setCommitMessage(_commitMessage);
-      const _startIndex = _commitMessage.search(SEARCH_PATTERN) ?? -1;
-      setStartIndex(_startIndex);
-      setIsValid(!!_commitMessage && _startIndex !== -1);
-    };
-    asyncCall().then((x) => null);
-  }, []);
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    setWarning("");
 
-  if (isValid) return extractCommit(commitMessage, startIndex);
-  return "";
+    const load = async () => {
+      const commits = await getCommits(config);
+      if (cancelled) return;
+      setLog(commits);
+
+      try {
+        const sha = await getDeployedCommit(config);
+        if (cancelled) return;
+        setDeployedSHA(sha);
+        if (!sha) {
+          setWarning(
+            `No deploy marker found on "${config.deployBranch}". Pick the baseline commit manually below.`
+          );
+        }
+      } catch {
+        if (cancelled) return;
+        setDeployedSHA("");
+        setWarning(
+          `Branch "${config.deployBranch}" is unreachable. Pick the baseline commit manually below.`
+        );
+      }
+    };
+
+    load()
+      .catch((cause: Error) => {
+        if (!cancelled) setError(cause.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [config, nonce]);
+
+  return { deployedSHA, log, loading, error, warning, reload };
 };
+
+/** Legacy helper kept for callers that only need the live SHA. */
+export const useDeployedCommit = (config: RepoConfig): string =>
+  useDeployment(config).deployedSHA;
