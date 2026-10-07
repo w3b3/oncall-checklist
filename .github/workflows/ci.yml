@@ -1,0 +1,21 @@
+name: CI
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # webpack 4 (react-scripts 4) needs legacy OpenSSL on modern Node.
+      NODE_OPTIONS: --openssl-legacy-provider
+      CI: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+      - run: npm ci
+      - run: npm test -- --watchAll=false
+      - run: npm run build
